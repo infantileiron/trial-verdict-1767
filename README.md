@@ -10,8 +10,17 @@
 
 1. **实验档案**：实验编号、假设、带时区观察期、预期A组占比；没有事件时可修订协议API，有事件后禁止事后改写。
 2. **事件核对**：曝光/激活，按实验+用户+类型去重，禁止同用户跨组、未来事件、超观察期及先激活后曝光。
-3. **实验裁决**：Redis队列由Python worker真算比例z检验、SRM卡方、绝对提升及95%区间，保留协议与全部输入快照。
-4. **发布记录**：分析员填写业务理由，管理员签核上线B或保留A。未到期、SRM异常、小样本禁止发布；上线B还需正向显著提升。已发布裁决不可覆盖。
+3. **身份归并**：访客登录后换标识会被重复计数。支持导入别名关联（批量关联对），按并查集归并同一人的曝光与激活，原始事件与关联依据全程保留。关联任务有待处理/处理中/完成/失败状态，中断可恢复、重试幂等。
+4. **实验裁决**：Redis队列由Python worker真算比例z检验、SRM卡方、绝对提升及95%区间，保留协议、身份关系版本与全部输入快照。
+5. **发布记录**：分析员填写业务理由，管理员签核上线B或保留A。未到期、SRM异常、小样本、身份污染禁止发布；上线B还需正向显著提升。已发布裁决不可覆盖。
+
+### 身份归并口径（重点）
+
+- 每个 `user_key` 经并查集解析到唯一 canonical 身份；未登记别名的标识以自身为身份。
+- **原始人数**（不同标识数）与**去重人数**（canonical 身份数）同时保留展示。
+- 同一 canonical 身份在同一实验同时落入 A、B 两组即**污染身份**：单列人数与明细，不计入任一组干净样本，并在裁决中阻断发布——不允许任选一组，也不悄悄剔除。
+- 全局 `identity_version` 仅在关联真正生效时递增；纯重试、已同身份的关联跳过，不重复改变人数。
+- 裁决提交时冻结 `identity_version` 与 `user_key→canonical` 映射，计算只在冻结映射上进行：归并与新事件采集、裁决并发时，新旧结果不混用；已冻结裁决永不改变。归并后用旧别名补采的事件经当前映射仍归同一人，但只影响之后的新裁决。
 
 | 角色 | 页面 | 权限与动作 |
 |---|---|---|
@@ -68,9 +77,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 `frontend/src` 按api/stores/types/components/hooks/pages/router/utils/constants拆分；`backend/src` 按routes/controllers/services/models/schemas/middlewares/utils/constants/config拆分；`backend/scripts/seed_demo.py`；`backend/migrations`记录初始元数据约束。schema由SQLAlchemy metadata初始化。所有计算/校验/持久化均在Python。
 
-共享枚举：后端 `backend/src/constants/enums.py`，前端 `frontend/src/constants/enums.js`，含角色admin/analyst/viewer、组别A/B、事件exposure/activation、任务queued/running/done/failed、裁决publish_b/keep_a；schema的Literal校验和页面选择器使用同组值。
+共享枚举：后端 `backend/src/constants/enums.py`，前端 `frontend/src/constants/enums.js`，含角色admin/analyst/viewer、组别A/B、事件exposure/activation、任务queued/running/done/failed、裁决publish_b/keep_a、别名任务项pending/done/failed/skipped；schema的Literal校验和页面选择器使用同组值。
 
-本地开发：后端安装 `backend/requirements.lock`（完整固定版本），设置DATABASE_URL、REDIS_URL、JWT_SECRET后在backend运行`uvicorn src.main:app --reload --port 8000`；另开`python -m src.worker`。前端可用本项目Nginx容器代理该后端，所有请求统一`/api/`剥前缀。常用API为 `/auth/login`、`/experiments`、`/events`、`/decisions`、`/decisions/{id}/rationale`、`/decisions/{id}/publish`、`/decisions/{id}/export`。
+本地开发：后端安装 `backend/requirements.lock`（完整固定版本），设置DATABASE_URL、REDIS_URL、JWT_SECRET后在backend运行`uvicorn src.main:app --reload --port 8000`；另开`python -m src.worker`。前端可用本项目Nginx容器代理该后端，所有请求统一`/api/`剥前缀。常用API为 `/auth/login`、`/experiments`、`/events`、`/decisions`、`/decisions/{id}/rationale`、`/decisions/{id}/publish`、`/decisions/{id}/export`；身份归并为 `/identity/jobs`（导入关联，POST 传 `{source,note,pairs:[{a_key,b_key}]}`）、`/identity/jobs/{id}/retry`（失败/中断恢复）、`/identity/jobs/{id}`（任务及逐条依据）、`/identity/report?experiment_id=`（原始/去重人数与污染明细）、`/identity/lookup?user_key=`（归并链、别名、关联依据）。无第三方依赖的核心口径测试见 `tests/`（标准库 `python3 -m unittest`）。
 
 环境变量见`.env.example`：COMPOSE_PROJECT_NAME、三宿主端口、DB_PASSWORD、JWT_SECRET、SEED_DEMO、NETWORK_SUBNET；内部DATABASE_URL与REDIS_URL由Compose设置。默认显式子网10.253.104.0/24用于避开本机地址池耗尽，迁移时可修改。5服务都有健康检查，MySQL通过TCP SELECT1验证应用用户，worker用20秒心跳；后端健康检查同时查数据库和Redis。审计记录操作者/动作/UTC时间；请求ID、安全响应头与全局错误恢复构成横切处理。
 

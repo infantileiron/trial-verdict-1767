@@ -1,0 +1,15 @@
+-- 身份别名归并（identity resolution）增量表，由 SQLAlchemy metadata 自动创建。
+-- 设计目标：访客登录前后标识不同导致同人重复计数，导入别名关联后按人去重，
+-- 同时保留原始事件与关联依据；同一身份跨 A/B 两组单列为污染并阻断发布。
+--
+-- identities           canonical 身份（并查集根节点）；被合并根保留，parent_id 指向新根，支撑归并链追查
+-- identity_members     user_key -> identity_id 当前映射，user_key 全局唯一（一个别名只能归一个人）
+-- identity_merges      归并历史 left_id+right_id -> merged_id，记录依据任务与归并后身份版本
+-- identity_versions    全局身份关系版本（单行 id=1），仅当关联真正生效才递增，纯重试/跳过不递增
+-- alias_jobs           别名导入任务：queued/running/done/failed，可中断恢复，重试幂等
+-- alias_job_items      任务内单条关联及独立状态（pending/done/failed/skipped）
+-- alias_links          原始关联依据留痕，(a_key,b_key) 唯一，方向归一化，不覆盖原始事件
+--
+-- 裁决快照 decisions.snapshot 新增 identity 节点：identity_version + identity_map + counts，
+-- 计算只在冻结映射上进行；归并产生新版本不影响已冻结裁决，算法版本 two-proportion-srm-identity-2.0。
+SELECT 1;

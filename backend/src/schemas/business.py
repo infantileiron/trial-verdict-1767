@@ -24,3 +24,13 @@ class RationaleInput(BaseModel):
  rationale:str=Field(min_length=10,max_length=3000)
 class PublishInput(BaseModel):
  action:Literal['publish_b','keep_a']
+class AliasPair(BaseModel):
+ a_key:str=Field(min_length=1,max_length=80);b_key:str=Field(min_length=1,max_length=80)
+ @model_validator(mode='after')
+ def pair(self):
+  if self.a_key.strip()==self.b_key.strip():raise ValueError('关联两侧标识不能相同')
+  return self
+class AliasJobInput(BaseModel):
+ source:str=Field(default='manual',min_length=1,max_length=40)
+ note:str=Field(default='',max_length=300)
+ pairs:list[AliasPair]=Field(min_length=1,max_length=1000)
